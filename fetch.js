@@ -1,4 +1,4 @@
-(function() {
+(function(self) {
   'use strict';
 
   if (self.fetch) {
@@ -221,6 +221,13 @@
     } else {
       this.url = input
     }
+    
+    var url = /^(.*:)\/\/([A-Za-z0-9\-\.]+)(:[0-9]+)?(.*)$/.match(this.url)
+    if(!url) throw new TypeError("Bad URL")
+    this.protocol = url[1]
+    this.host = url[2]
+    this.port = url[3] || 80
+    this.query = url[4]
 
     this.credentials = options.credentials || this.credentials || 'omit'
     if (options.headers || !this.headers) {
@@ -249,9 +256,9 @@
     return form
   }
 
-  function headers(xhr) {
+  function headers(allheaders) {
     var head = new Headers()
-    var pairs = xhr.getAllResponseHeaders().trim().split('\n')
+    var pairs = allheaders.trim().split('\n')
     pairs.forEach(function(header) {
       var split = header.trim().split(':')
       var key = split.shift().trim()
@@ -293,57 +300,77 @@
     }
 
     return new Promise(function(resolve, reject) {
-      var xhr = new XMLHttpRequest()
-
-      function responseURL() {
-        if ('responseURL' in xhr) {
-          return xhr.responseURL
+      var http = new HTTP(function(data) {
+        http.Close()
+        var response = data.match(/^(\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/)
+        if(!response) {
+          reject(new TypeError("Bad HTTP response"))
+          return
         }
-
-        // Avoid security warnings on getResponseHeader when not allowed by CORS
-        if (/^X-Request-URL:/m.test(xhr.getAllResponseHeaders())) {
-          return xhr.getResponseHeader('X-Request-URL')
-        }
-
-        return;
-      }
-
-      xhr.onload = function() {
-        var status = (xhr.status === 1223) ? 204 : xhr.status
+        var status = parseInt(response[1])
         if (status < 100 || status > 599) {
-          reject(new TypeError('Network request failed'))
+          reject(new TypeError('HTTP request failed'))
           return
         }
         var options = {
           status: status,
-          statusText: xhr.statusText,
-          headers: headers(xhr),
-          url: responseURL()
+          statusText: response[2],
+          headers: headers(response[3]),
+          url: request.url
         }
-        var body = 'response' in xhr ? xhr.response : xhr.responseText;
-        resolve(new Response(body, options))
+        resolve(new Response(response[4], options))
+      })
+      
+      http.OnConnectFunc = function() {
+        if(request.protocol == 'https:') {
+          if(!http.StartSSLHandshake()) http.OnSSLHandshakeFailedFunc()
+        } else {
+          http.OnSSLHandshakeOKFunc()
+        }
       }
+      
+      http.OnSSLHandshakeOKFunc = function() {
+        if(!request.headers.has("Host")) request.headers.set("Host", request.host)
+        if(typeof request._bodyInit !== 'undefined') {
+          request.headers.set("Content-Length", request._bodyInit.length)
+        }
+        
+        var data = request.method + " " + request.query + " HTTP/1.1"
+        var lastname
+        request.headers.forEach(function(value, name) {
+          if(name != lastname) {
+            lastname = name
+            data = data + "\r\n" + name + ": " + value
+          } else {
+            data = data + ";" + value
+          }
+        })
 
-      xhr.onerror = function() {
+        if(typeof request._bodyInit !== 'undefined') {
+          data = data + "\r\n\r\n" + request._bodyInit
+        } else {
+           data = data + "\r\n\r\n"
+        }
+
+        http.Write(data)
+      }
+      
+      http.OnSSLHandshakeFailedFunc = function() {
+        http.Close()
+        reject(new TypeError('SSL handshake failed'))
+      }
+      
+      http.OnConnectFailedFunc = function() {
+        http.Close()
         reject(new TypeError('Network request failed'))
       }
-
-      xhr.open(request.method, request.url, true)
-
-      if (request.credentials === 'include') {
-        xhr.withCredentials = true
+      
+      http.OnDisconnectFunc = function() {
+        http.Close()
       }
 
-      if ('responseType' in xhr && support.blob) {
-        xhr.responseType = 'blob'
-      }
-
-      request.headers.forEach(function(value, name) {
-        xhr.setRequestHeader(name, value)
-      })
-
-      xhr.send(typeof request._bodyInit === 'undefined' ? null : request._bodyInit)
+      http.Open(request.host, request.port)
     })
   }
   self.fetch.polyfill = true
-})();
+})(this);
