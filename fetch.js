@@ -189,6 +189,12 @@
       return this.text().then(JSON.parse)
     }
 
+    this.xml = function() {
+      return this.text().then(function(text) {
+        return new XML(text.replace(/<\?[^>]+\?>/,''))
+      })
+    }
+
     return this
   }
 
