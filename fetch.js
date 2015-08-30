@@ -228,11 +228,11 @@
       this.url = input
     }
     
-    var url = /^(.*:)\/\/([A-Za-z0-9\-\.]+)(:[0-9]+)?(.*)$/.match(this.url)
+    var url = /^(.*:)\/\/([A-Za-z0-9\-\.]+)(:[0-9]+)?(.*)$/.exec(this.url)
     if(!url) throw new TypeError("Bad URL")
     this.protocol = url[1]
     this.host = url[2]
-    this.port = url[3] || 80
+    this.port = parseInt(url[3]) || 80
     this.query = url[4]
 
     this.credentials = options.credentials || this.credentials || 'omit'
@@ -308,7 +308,7 @@
     return new Promise(function(resolve, reject) {
       var http = new HTTP(function(data) {
         http.Close()
-        var response = data.match(/^(\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/)
+        var response = /^(\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/.exec(data)
         if(!response) {
           reject(new TypeError("Bad HTTP response"))
           return
