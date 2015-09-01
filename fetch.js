@@ -228,7 +228,7 @@
       this.url = input
     }
     
-    var url = /^(.*:)\/\/([A-Za-z0-9\-\.]+)(:[0-9]+)?(.*)$/.exec(this.url)
+    var url = /^(.*:)\/\/([A-Za-z0-9\-\.]+)(?::([0-9]+))?(.*)$/.exec(this.url)
     if(!url) throw new TypeError("Bad URL")
     this.protocol = url[1]
     this.host = url[2]
