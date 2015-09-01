@@ -1,5 +1,21 @@
 (function(self) {
   'use strict';
+  
+  if(!self.Object.getOwnPropertyNames) {
+    self.Object.getOwnPropertyNames = function(obj) {
+      var ret = []
+      for(var x in obj) {
+        ret.push(x)
+      }
+      return ret;
+    }
+  }
+  
+  if(!self.String.prototype.trim) {
+    self.String.prototype.trim = function() {
+      return this.replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
+    }
+  }
 
   if (self.fetch) {
     return
@@ -298,59 +314,63 @@
   self.Response = Response;
   
   var connection_pool = []
-  var connection_pool_handlers = {}
+  connection_pool.handlers = {}
   
-  function connection_pool_onData(data, handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onData(data, handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onData(data);
   }
+  self._connection_pool_onData = _connection_pool_onData
   
-  function connection_pool_onConnectFunc(handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onConnectFunc(handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onConnect();
   }
+  self._connection_pool_onConnectFunc = _connection_pool_onConnectFunc
   
-  function connection_pool_onConnectFailedFunc(handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onConnectFailedFunc(handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onConnectFailed();
   }
+  self._connection_pool_onConnectFailedFunc = _connection_pool_onConnectFailedFunc
   
-  function connection_pool_onDisconnectFunc(handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onDisconnectFunc(handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onDisconnect();
   }
+  self._connection_pool_onDisconnectFunc = _connection_pool_onDisconnectFunc
   
-  function connection_pool_onSSLHandshakeOKFunc(handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onSSLHandshakeOKFunc(handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onSSLHandshakeOK();
   }
+  self._connection_pool_onSSLHandshakeOKFunc = _connection_pool_onSSLHandshakeOKFunc
   
-  function connection_pool_onSSLHandshakeFailedFunc(handle) {
-    var handler = connection_pool_handlers[handle]
+  function _connection_pool_onSSLHandshakeFailedFunc(handle) {
+    var handler = connection_pool.handlers[handle]
     if(handler) handler.onSSLHandshakeFailed();
   }
+  self._connection_pool_onSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
   
   connection_pool.get = function(handler) {
     if(this.length) { 
       var http = this.pop();
-      http.handler = handler;
-      connection_pool_handlers[http.Handle] = handler
-      return http;
     } else {
-      http = new HTTP(connection_pool_onData)
-      http.OnConnectFunc = connection_pool_onConnectFunc
-      http.OnConnectFailedFunc = connection_pool_onConnectFailedFunc
-      http.OnDisconnectFunc = connection_pool_onDisconnectFunc
-      http.OnSSLHandshakeOKFunc = connection_pool_onSSLHandshakeOKFunc
-      http.OnSSLHandshakeFailedFunc = connection_pool_onSSLHandshakeFailedFunc
+      http = new HTTP(_connection_pool_onData)
+      http.OnConnectFunc = _connection_pool_onConnectFunc
+      http.OnConnectFailedFunc = _connection_pool_onConnectFailedFunc
+      http.OnDisconnectFunc = _connection_pool_onDisconnectFunc
+      http.OnSSLHandshakeOKFunc = _connection_pool_onSSLHandshakeOKFunc
+      http.OnSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
 
       http.UseHandleInCallbacks = true
-      http.AddRxHTTPFraming()
     }
+    connection_pool.handlers[http.Handle] = handler
+    return http;
   }
   
   connection_pool.release = function(http) {
-    delete connection_pool_handlers[http.Handle]
+    delete connection_pool.handlers[http.Handle]
     http.Close()
     connection_pool.push(http)
   }
@@ -368,7 +388,7 @@
       request.onData = function(data) {
         connection_pool.release(http)
         
-        var response = /^(\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/.exec(data)
+        var response = /^HTTP\/1\.[01] (\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/.exec(data)
         if(!response) {
           reject(new TypeError("Bad HTTP response"))
           return
@@ -436,6 +456,7 @@
       }
 
       http.Open(request.host, request.port)
+      http.AddRxHTTPFraming()
     })
   }
   self.fetch.polyfill = true
