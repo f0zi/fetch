@@ -296,6 +296,64 @@
   self.Headers = Headers;
   self.Request = Request;
   self.Response = Response;
+  
+  var connection_pool = []
+  var connection_pool_handlers = {}
+  
+  function connection_pool_onData(data, handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onData(data);
+  }
+  
+  function connection_pool_onConnectFunc(handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onConnect();
+  }
+  
+  function connection_pool_onConnectFailedFunc(handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onConnectFailed();
+  }
+  
+  function connection_pool_onDisconnectFunc(handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onDisconnect();
+  }
+  
+  function connection_pool_onSSLHandshakeOKFunc(handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onSSLHandshakeOK();
+  }
+  
+  function connection_pool_onSSLHandshakeFailedFunc(handle) {
+    var handler = connection_pool_handlers[handle]
+    if(handler) handler.onSSLHandshakeFailed();
+  }
+  
+  connection_pool.get = function(handler) {
+    if(this.length) { 
+      var http = this.pop();
+      http.handler = handler;
+      connection_pool_handlers[http.Handle] = handler
+      return http;
+    } else {
+      http = new HTTP(connection_pool_onData)
+      http.OnConnectFunc = connection_pool_onConnectFunc
+      http.OnConnectFailedFunc = connection_pool_onConnectFailedFunc
+      http.OnDisconnectFunc = connection_pool_onDisconnectFunc
+      http.OnSSLHandshakeOKFunc = connection_pool_onSSLHandshakeOKFunc
+      http.OnSSLHandshakeFailedFunc = connection_pool_onSSLHandshakeFailedFunc
+
+      http.UseHandleInCallbacks = true
+      http.AddRxHTTPFraming()
+    }
+  }
+  
+  connection_pool.release = function(http) {
+    delete connection_pool_handlers[http.Handle]
+    http.Close()
+    connection_pool.push(http)
+  }
 
   self.fetch = function(input, init) {
     var request
@@ -306,8 +364,10 @@
     }
 
     return new Promise(function(resolve, reject) {
-      var http = new HTTP(function(data) {
-        http.Close()
+      var http = connection_pool.get(request)
+      request.onData = function(data) {
+        connection_pool.release(http)
+        
         var response = /^(\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/.exec(data)
         if(!response) {
           reject(new TypeError("Bad HTTP response"))
@@ -325,17 +385,17 @@
           url: request.url
         }
         resolve(new Response(response[4], options))
-      })
+      }
       
-      http.OnConnectFunc = function() {
+      request.onConnect = function() {
         if(request.protocol == 'https:') {
-          if(!http.StartSSLHandshake()) http.OnSSLHandshakeFailedFunc()
+          if(!http.StartSSLHandshake()) request.onSSLHandshakeFailed()
         } else {
-          http.OnSSLHandshakeOKFunc()
+          request.onSSLHandshakeOK()
         }
       }
       
-      http.OnSSLHandshakeOKFunc = function() {
+      request.onSSLHandshakeOK = function() {
         if(!request.headers.has("Host")) request.headers.set("Host", request.host)
         if(typeof request._bodyInit !== 'undefined') {
           request.headers.set("Content-Length", request._bodyInit.length)
@@ -361,18 +421,18 @@
         http.Write(data)
       }
       
-      http.OnSSLHandshakeFailedFunc = function() {
-        http.Close()
+      request.onSSLHandshakeFailed = function() {
+        connection_pool.release(http)
         reject(new TypeError('SSL handshake failed'))
       }
       
-      http.OnConnectFailedFunc = function() {
-        http.Close()
+      request.onConnectFailed = function() {
+        connection_pool.release(http)
         reject(new TypeError('Network request failed'))
       }
       
-      http.OnDisconnectFunc = function() {
-        http.Close()
+      request.onDisconnect = function() {
+        connection_pool.release(http)
       }
 
       http.Open(request.host, request.port)
