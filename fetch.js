@@ -1,22 +1,6 @@
 (function(self) {
   'use strict';
   
-  if(!self.Object.getOwnPropertyNames) {
-    self.Object.getOwnPropertyNames = function(obj) {
-      var ret = []
-      for(var x in obj) {
-        ret.push(x)
-      }
-      return ret;
-    }
-  }
-  
-  if(!self.String.prototype.trim) {
-    self.String.prototype.trim = function() {
-      return this.replace(/^[\s\uFEFF\xA0]+|[\s\uFEFF\xA0]+$/g, '');
-    }
-  }
-
   if (self.fetch) {
     return
   }
@@ -47,9 +31,9 @@
       }, this)
 
     } else if (headers) {
-      Object.getOwnPropertyNames(headers).forEach(function(name) {
+      for(var name in headers) {
         this.append(name, headers[name])
-      }, this)
+      }
     }
   }
 
@@ -86,11 +70,11 @@
   }
 
   Headers.prototype.forEach = function(callback, thisArg) {
-    Object.getOwnPropertyNames(this.map).forEach(function(name) {
+    for(var name in this.map) {
       this.map[name].forEach(function(value) {
         callback.call(thisArg, value, name, this)
       }, this)
-    }, this)
+    }
   }
 
   function consumed(body) {
