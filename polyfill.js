@@ -36,9 +36,9 @@ if (!String.prototype.trim) {
 (function(global) {
 	if(!global.setTimeout) {
 		function _setTimeoutCallback(handle) {
-			var handler = _setTimeoutCallback.handlers[handle]
+			var entry = _setTimeoutCallback.handlers[handle]
 			delete _setTimeoutCallback.handlers[handle]
-			if(handler) handler()
+			if(entry && entry.handler) entry.handler()
 		}
 		global._setTimeoutCallback = _setTimeoutCallback
 		_setTimeoutCallback.handlers = {}
@@ -47,20 +47,23 @@ if (!String.prototype.trim) {
 			var timer = new Timer()
 			timer.UseHandleInCallbacks = true
 			
+			var entry = { timer: timer }
 			if(typeof(code) == 'string') {
-				_setTimeoutCallback.handlers[timer.Handle] = function() { eval(code) }
+				entry.handler = function() { eval(code) }
 			} else if(typeof(code) == 'function') {
-				_setTimeoutCallback.handlers[timer.Handle] = Function.prototype.bind.apply(code, undefined, Array.prototype.slice.call(arguments, 2))
+				entry.handler = Function.prototype.bind.apply(code, undefined, Array.prototype.slice.call(arguments, 2))
 			} else throw new TypeError("Invalid code passed to setTimeout")
+			_setTimeoutCallback.handlers[timer.Handle] = entry
 			
 			timer.Start(_setTimeoutCallback, delay)
-			return timer
+			return timer.Handle;
 		}
 		global.setTimeout = setTimeout
 		
-		function clearTimeout(timer) {
-			timer.Stop()
-			delete _setTimeoutCallback.handlers[timer.Handle]
+		function clearTimeout(handle) {
+			var entry = _setTimeoutCallback.handlers[handle]
+			delete _setTimeoutCallback.handlers[handle]
+			if(entry && entry.timer) entry.timer.Stop()
 		}
 		global.clearTimeout = clearTimeout
 	}
