@@ -55,6 +55,14 @@ test.skip('rejects promise for network error', function() {
   })
 })
 
+test('rejects when Request constructor throws', function() {
+  return fetch('/request', { method: 'GET', body: 'invalid' }).then(function() {
+    assert(false, 'Invalid Request init was accepted')
+  }).catch(function(error) {
+    assert(error instanceof TypeError, 'Rejected with Error')
+  })
+})
+
 // https://fetch.spec.whatwg.org/#headers-class
 suite('Headers', function() {
   test('constructor copies headers', function() {
@@ -197,6 +205,27 @@ suite('Request', function() {
     })
   })
 
+  ;(ArrayBuffer in self ? test : test.skip)('sends ArrayBuffer body', function() {
+    var text = 'name=Hubot'
+
+    var buf = new ArrayBuffer(text.length)
+    var view = new Uint8Array(buf)
+
+    for(var i = 0; i < text.length; i++) {
+      view[i] = text.charCodeAt(i)
+    }
+
+    return fetch('/request', {
+      method: 'post',
+      body: buf
+    }).then(function(response) {
+      return response.json()
+    }).then(function(request) {
+      assert.equal(request.method, 'POST')
+      assert.equal(request.data, 'name=Hubot')
+    })
+  })
+
   test('construct with url', function() {
     var request = new Request('https://fetch.spec.whatwg.org/')
     assert.equal(request.url, 'https://fetch.spec.whatwg.org/')
@@ -265,7 +294,7 @@ suite('Request', function() {
     })
   })
 
-  ;(/Chrome\//.test(navigator.userAgent) ? test.skip : test)('construct with used Request body', function() {
+  ;(/Chrome\//.test(navigator.userAgent) && !fetch.polyfill ? test.skip : test)('construct with used Request body', function() {
     var request1 = new Request('https://fetch.spec.whatwg.org/', {
       method: 'post',
       body: 'I work out'
@@ -274,6 +303,36 @@ suite('Request', function() {
     return request1.text().then(function() {
       assert.throws(function() {
         new Request(request1)
+      }, TypeError)
+    })
+  })
+
+  test('clone request', function() {
+    var req = new Request('https://fetch.spec.whatwg.org/', {
+      method: 'post',
+      headers: {'content-type': 'text/plain'},
+      body: 'I work out'
+    })
+    var clone = req.clone()
+
+    assert.equal(clone.method, 'POST')
+    assert.equal(clone.headers.get('content-type'), 'text/plain')
+    assert.notEqual(clone.headers, req.headers)
+
+    return clone.text().then(function(body) {
+      assert.equal(body, 'I work out')
+    })
+  })
+
+  ;(/Chrome\//.test(navigator.userAgent) && !fetch.polyfill ? test.skip : test)('clone with used Request body', function() {
+    var req = new Request('https://fetch.spec.whatwg.org/', {
+      method: 'post',
+      body: 'I work out'
+    })
+
+    return req.text().then(function() {
+      assert.throws(function() {
+        req.clone()
       }, TypeError)
     })
   })
@@ -372,9 +431,53 @@ suite('Response', function() {
     var r = new Response('{"foo":"bar"}', {headers: {'content-type': 'application/json'}});
     assert.equal(r.headers instanceof Headers, true);
     return r.json().then(function(json){
-      assert(json.foo, 'bar');
+      assert.equal(json.foo, 'bar');
       return json;
     })
+  })
+
+  test('clone text response', function() {
+    var res = new Response('{"foo":"bar"}', {
+      headers: {'content-type': 'application/json'}
+    })
+    var clone = res.clone()
+
+    assert.notEqual(clone.headers, res.headers, 'headers were cloned')
+    assert.equal(clone.headers.get('content-type'), 'application/json')
+
+    return Promise.all([clone.json(), res.json()]).then(function(jsons){
+      assert.deepEqual(jsons[0], jsons[1], 'json of cloned object is the same as original')
+    })
+  })
+
+  ;(Response.prototype.arrayBuffer ? test : test.skip)('clone blob response', function() {
+    return fetch('/binary').then(function(response) {
+      return Promise.all([response.clone().arrayBuffer(), response.arrayBuffer()]).then(function(bufs){
+        bufs.forEach(function(buf){
+          assert(buf instanceof ArrayBuffer, 'buf is an ArrayBuffer instance')
+          assert.equal(buf.byteLength, 256, 'buf.byteLength is correct')
+          var view = new Uint8Array(buf)
+          for (var i = 0; i < 256; i++) {
+            assert.equal(view[i], i)
+          }
+        })
+      })
+    })
+  })
+
+  test('error creates error Response', function() {
+    var r = Response.error()
+    assert(r instanceof Response)
+    assert.equal(r.status, 0)
+    assert.equal(r.statusText, '')
+    assert.equal(r.type, 'error')
+  })
+
+  test('redirect creates redirect Response', function() {
+    var r = Response.redirect('https://fetch.spec.whatwg.org/', 301)
+    assert(r instanceof Response);
+    assert.equal(r.status, 301)
+    assert.equal(r.headers.get('Location'), 'https://fetch.spec.whatwg.org/')
   })
 })
 
@@ -601,8 +704,7 @@ suite('Methods', function() {
     })
   })
 
-  // TODO: Waiting to verify behavior
-  test.skip('GET with body throws TypeError', function() {
+  test('GET with body throws TypeError', function() {
     assert.throw(function() {
       new Request('', {
         method: 'get',
@@ -611,7 +713,7 @@ suite('Methods', function() {
     }, TypeError)
   })
 
-  test.skip('HEAD with body throws TypeError', function() {
+  test('HEAD with body throws TypeError', function() {
     assert.throw(function() {
       new Request('', {
         method: 'head',
