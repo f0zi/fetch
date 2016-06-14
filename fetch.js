@@ -404,7 +404,14 @@
       request.onData = function(data) {
         connection_pool.release(http)
         
-        var response = /^HTTP\/1\.[01] (\d+)\s(.+)\r\n([\s\S]+?)\r\n\r\n([\s\S]*)$/.exec(data)
+        var split = data.indexOf("\r\n\r\n")
+        if (split == -1) {
+          reject(new TypeError("Bad HTTP response"))
+          return
+        }
+        var header = data.substr(0, split)
+        data = data.substr(split + 4);
+        var response = /^HTTP\/1\.[01] (\d+)\s(.+)\r\n([\s\S]+?)$/.exec(header)
         if(!response) {
           reject(new TypeError("Bad HTTP response"))
           return
@@ -420,7 +427,7 @@
           headers: headers(response[3]),
           url: request.url
         }
-        resolve(new Response(response[4], options))
+        resolve(new Response(data, options))
       }
       
       request.onConnect = function() {
