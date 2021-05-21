@@ -479,7 +479,7 @@
         resolve(this.pop())
       } else {
         // pool is empty
-        if(self.fetch.max_http_objects > 0 && self.fetch.max_http_objects <= connection_pool.num_handlers && handler.priority <= 9000) {
+        if(self.fetch.max_http_objects > 0 && self.fetch.max_http_objects <= connection_pool.num_handlers && (handler.priority || 0) <= 9000) {
           // have to defer
           if(self.fetch.max_deferred_requests >= 0 && connection_pool.deferred_requests.length >= self.fetch.max_deferred_requests) {
             // we have connection_pool.num_handler ongoing connections + connection_pool.deferred_requests.length deferred requests
@@ -526,11 +526,12 @@
   
   connection_pool.release = function(http) {
     delete connection_pool.handlers[http.Handle]
+    connection_pool.num_handlers--
     http.Close()
+
     if(connection_pool.deferred_requests.length) {
       connection_pool.deferred_requests.shift().use(http)
     } else if(self.fetch.max_http_objects != 0) {
-      connection_pool.num_handlers--
       connection_pool.push(http)
     }
   }
