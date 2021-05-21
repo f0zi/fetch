@@ -474,7 +474,7 @@
   self._connection_pool_onSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
   
   connection_pool.get = function(handler) {
-    return new Promise((function(resolve, reject) {
+    return new Promise(function(resolve, reject) {
       if(this.length) {
         resolve(this.pop())
       } else {
@@ -486,24 +486,23 @@
             reject(new Error("Maximum number of deferred requests reached"))
             return
           }
-          if(handler.deferTimeout) {
-            var timed_out = false
 
-            setTimeout(function() {
-              timed_out = true
-              reject(new Error("Timeout waiting for http object"))
-            }, handler.deferTimeout)
+          var timed_out = false
+          if(handler.deferTimeout) setTimeout(function() {
+            timed_out = true
+            reject(new Error("Timeout waiting for http object"))
+          }, handler.deferTimeout)
 
-            connection_pool.deferred_requests.push({ use: function(http) {
-              if(timed_out) connection_pool.release(http)
-              else resolve(http)
-            }, priority: handler.priority || 0 })
-            connection_pool.deferred_requests.sort(function(a, b) { return b.priority - a.priority })
-          } else {
-            // ok, defer
-            connection_pool.deferred_requests.push({ use: resolve, priority: handler.priority || 0 })
-            connection_pool.deferred_requests.sort(function(a, b) { return b.priority - a.priority })
-          }
+          // ok, defer
+          connection_pool.deferred_requests.push({ use: function(http) {
+            if(timed_out) connection_pool.release(http)
+            else {
+              connection_pool.handlers[http.Handle] = handler
+              connection_pool.num_handlers++
+              resolve(http)
+            }
+          }, priority: handler.priority || 0 })
+          connection_pool.deferred_requests.sort(function(a, b) { return b.priority - a.priority })
         } else {
           // create a new one, this permanently increases the pool size
           var http = new HTTP(_connection_pool_onData)
@@ -514,13 +513,12 @@
           http.OnSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
 
           http.UseHandleInCallbacks = true
+
+          connection_pool.handlers[http.Handle] = handler
+          connection_pool.num_handlers++
           resolve(http)
         }
       }
-    }).bind(this)).then(function(http) {
-      connection_pool.handlers[http.Handle] = handler
-      connection_pool.num_handlers++
-      return http
     })
   }
   
