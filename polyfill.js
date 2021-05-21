@@ -33,6 +33,12 @@ if (!String.prototype.trim) {
 	};
 }
 
+if(!Array.isArray) {
+	Array.isArray = function(arg) {
+		return arg instanceof Array
+	}
+}
+
 (function(global) {
 	if(!global.setTimeout) {
 		function _setTimeoutCallback(handle) {
