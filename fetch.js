@@ -346,6 +346,9 @@
     this.mode = options.mode || this.mode || null
     this.referrer = null
 
+    if(typeof options.priority == 'number') this.priority = options.priority
+    if(typeof options.deferTimeout == 'number') this.deferTimeout = options.deferTimeout
+
     if ((this.method === 'GET' || this.method === 'HEAD') && body) {
       throw new TypeError('Body not allowed for GET or HEAD requests')
     }
@@ -431,64 +434,105 @@
 
   var connection_pool = []
   connection_pool.handlers = {}
+  connection_pool.deferred_requests = []
+  connection_pool.num_handlers = 0
   
   function _connection_pool_onData(data, handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onData(data);
+    if(handler) handler.onData(data)
   }
   self._connection_pool_onData = _connection_pool_onData
   
   function _connection_pool_onConnectFunc(handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onConnect();
+    if(handler) handler.onConnect()
   }
   self._connection_pool_onConnectFunc = _connection_pool_onConnectFunc
   
   function _connection_pool_onConnectFailedFunc(handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onConnectFailed();
+    if(handler) handler.onConnectFailed()
   }
   self._connection_pool_onConnectFailedFunc = _connection_pool_onConnectFailedFunc
   
   function _connection_pool_onDisconnectFunc(handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onDisconnect();
+    if(handler) handler.onDisconnect()
   }
   self._connection_pool_onDisconnectFunc = _connection_pool_onDisconnectFunc
   
   function _connection_pool_onSSLHandshakeOKFunc(handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onSSLHandshakeOK();
+    if(handler) handler.onSSLHandshakeOK()
   }
   self._connection_pool_onSSLHandshakeOKFunc = _connection_pool_onSSLHandshakeOKFunc
   
   function _connection_pool_onSSLHandshakeFailedFunc(handle) {
     var handler = connection_pool.handlers[handle]
-    if(handler) handler.onSSLHandshakeFailed();
+    if(handler) handler.onSSLHandshakeFailed()
   }
   self._connection_pool_onSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
   
   connection_pool.get = function(handler) {
-    if(this.length) { 
-      var http = this.pop();
-    } else {
-      http = new HTTP(_connection_pool_onData)
-      http.OnConnectFunc = _connection_pool_onConnectFunc
-      http.OnConnectFailedFunc = _connection_pool_onConnectFailedFunc
-      http.OnDisconnectFunc = _connection_pool_onDisconnectFunc
-      http.OnSSLHandshakeOKFunc = _connection_pool_onSSLHandshakeOKFunc
-      http.OnSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
+    return new Promise((function(resolve, reject) {
+      if(this.length) {
+        resolve(this.pop())
+      } else {
+        // pool is empty
+        if(self.fetch.max_http_objects > 0 && self.fetch.max_http_objects <= connection_pool.num_handlers && handler.priority <= 9000) {
+          // have to defer
+          if(self.fetch.max_deferred_requests >= 0 && connection_pool.deferred_requests.length >= self.fetch.max_deferred_requests) {
+            // we have connection_pool.num_handler ongoing connections + connection_pool.deferred_requests.length deferred requests
+            reject(new Error("Maximum number of deferred requests reached"))
+            return
+          }
+          if(handler.deferTimeout) {
+            var timed_out = false
 
-      http.UseHandleInCallbacks = true
-    }
-    connection_pool.handlers[http.Handle] = handler
-    return http;
+            setTimeout(function() {
+              timed_out = true
+              reject(new Error("Timeout waiting for http object"))
+            }, handler.deferTimeout)
+
+            connection_pool.deferred_requests.push({ use: function(http) {
+              if(timed_out) connection_pool.release(http)
+              else resolve(http)
+            }, priority: handler.priority || 0 })
+            connection_pool.deferred_requests.sort(function(a, b) { return b.priority - a.priority })
+          } else {
+            // ok, defer
+            connection_pool.deferred_requests.push({ use: resolve, priority: handler.priority || 0 })
+            connection_pool.deferred_requests.sort(function(a, b) { return b.priority - a.priority })
+          }
+        } else {
+          // create a new one, this permanently increases the pool size
+          var http = new HTTP(_connection_pool_onData)
+          http.OnConnectFunc = _connection_pool_onConnectFunc
+          http.OnConnectFailedFunc = _connection_pool_onConnectFailedFunc
+          http.OnDisconnectFunc = _connection_pool_onDisconnectFunc
+          http.OnSSLHandshakeOKFunc = _connection_pool_onSSLHandshakeOKFunc
+          http.OnSSLHandshakeFailedFunc = _connection_pool_onSSLHandshakeFailedFunc
+
+          http.UseHandleInCallbacks = true
+          resolve(http)
+        }
+      }
+    }).bind(this)).then(function(http) {
+      connection_pool.handlers[http.Handle] = handler
+      connection_pool.num_handlers++
+      return http
+    })
   }
   
   connection_pool.release = function(http) {
     delete connection_pool.handlers[http.Handle]
     http.Close()
-    connection_pool.push(http)
+    if(connection_pool.deferred_requests.length) {
+      connection_pool.deferred_requests.shift().use(http)
+    } else if(self.fetch.max_http_objects != 0) {
+      connection_pool.num_handlers--
+      connection_pool.push(http)
+    }
   }
 
   self.fetch = function(input, init) {
@@ -500,87 +544,90 @@
         request = new Request(input, init)
       }
 
-      var http = connection_pool.get(request)
-      request.onData = function(data) {
-        connection_pool.release(http)
-        
-        var split = data.indexOf("\r\n\r\n")
-        if (split == -1) {
-          reject(new TypeError("Bad HTTP response"))
-          return
-        }
-        var header = data.substr(0, split)
-        data = data.substr(split + 4);
-        var response = /^HTTP\/1\.[01] (\d+)\s(.+)\r\n([\s\S]+?)$/.exec(header)
-        if(!response) {
-          reject(new TypeError("Bad HTTP response"))
-          return
-        }
-        var status = parseInt(response[1])
-        if (status < 100 || status > 599) {
-          reject(new TypeError('HTTP request failed'))
-          return
-        }
-        var options = {
-          status: status,
-          statusText: response[2],
-          headers: parseHeaders(response[3]),
-          url: request.url
-        }
-        resolve(new Response(data, options))
-      }
-      
-      request.onConnect = function() {
-        if(request.protocol == 'https:') {
-          if(!http.StartSSLHandshake()) request.onSSLHandshakeFailed()
-        } else {
-          request.onSSLHandshakeOK()
-        }
-      }
-      
-      request.onSSLHandshakeOK = function() {
-        if(!request.headers.has("Host")) request.headers.set("Host", request.host)
-        if(typeof request._bodyInit !== 'undefined') {
-          request.headers.set("Content-Length", request._bodyInit.length)
-        }
-        
-        var data = request.method + " " + request.query + " HTTP/1.1"
-        var lastname
-        request.headers.forEach(function(value, name) {
-          if(name != lastname) {
-            lastname = name
-            data = data + "\r\n" + name + ": " + value
-          } else {
-            data = data + ";" + value
+      connection_pool.get(request).then(function(http) {
+        request.onData = function(data) {
+          connection_pool.release(http)
+          
+          var split = data.indexOf("\r\n\r\n")
+          if (split == -1) {
+            reject(new TypeError("Bad HTTP response"))
+            return
           }
-        })
+          var header = data.substr(0, split)
+          data = data.substr(split + 4)
+          var response = /^HTTP\/1\.[01] (\d+)\s(.+)\r\n([\s\S]+?)$/.exec(header)
+          if(!response) {
+            reject(new TypeError("Bad HTTP response"))
+            return
+          }
+          var status = parseInt(response[1])
+          if (status < 100 || status > 599) {
+            reject(new TypeError('HTTP request failed'))
+            return
+          }
+          var options = {
+            status: status,
+            statusText: response[2],
+            headers: parseHeaders(response[3]),
+            url: request.url
+          }
+          resolve(new Response(data, options))
+        }
+        
+        request.onConnect = function() {
+          if(request.protocol == 'https:') {
+            if(!http.StartSSLHandshake()) request.onSSLHandshakeFailed()
+          } else {
+            request.onSSLHandshakeOK()
+          }
+        }
+        
+        request.onSSLHandshakeOK = function() {
+          if(!request.headers.has("Host")) request.headers.set("Host", request.host)
+          if(typeof request._bodyInit !== 'undefined') {
+            request.headers.set("Content-Length", request._bodyInit.length)
+          }
+          
+          var data = request.method + " " + request.query + " HTTP/1.1"
+          var lastname
+          request.headers.forEach(function(value, name) {
+            if(name != lastname) {
+              lastname = name
+              data = data + "\r\n" + name + ": " + value
+            } else {
+              data = data + ";" + value
+            }
+          })
 
-        if(typeof request._bodyInit !== 'undefined') {
-          data = data + "\r\n\r\n" + request._bodyInit
-        } else {
-           data = data + "\r\n\r\n"
+          if(typeof request._bodyInit !== 'undefined') {
+            data = data + "\r\n\r\n" + request._bodyInit
+          } else {
+            data = data + "\r\n\r\n"
+          }
+
+          http.Write(data)
+        }
+        
+        request.onSSLHandshakeFailed = function() {
+          connection_pool.release(http)
+          reject(new TypeError('SSL handshake failed'))
+        }
+        
+        request.onConnectFailed = function() {
+          connection_pool.release(http)
+          reject(new TypeError('Network request failed'))
+        }
+        
+        request.onDisconnect = function() {
+          connection_pool.release(http)
         }
 
-        http.Write(data)
-      }
-      
-      request.onSSLHandshakeFailed = function() {
-        connection_pool.release(http)
-        reject(new TypeError('SSL handshake failed'))
-      }
-      
-      request.onConnectFailed = function() {
-        connection_pool.release(http)
-        reject(new TypeError('Network request failed'))
-      }
-      
-      request.onDisconnect = function() {
-        connection_pool.release(http)
-      }
-
-      http.Open(request.host, request.port)
-      http.AddRxHTTPFraming()
+        http.Open(request.host, request.port)
+        http.AddRxHTTPFraming()
+      }, reject)
     })
   }
   self.fetch.polyfill = true
-})(typeof self !== 'undefined' ? self : this);
+  self.fetch.max_http_objects = -1
+  self.fetch.max_deferred_requests = -1
+})(typeof self !== 'undefined' ? self : this)
